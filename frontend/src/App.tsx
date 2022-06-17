@@ -17,29 +17,37 @@ function App() {
     const authContext = useMsal()
     const [accessToken, setAccessToken] = useState('')
     useEffect(() => {
+        console.log('Testing')
         fetchAccessToken(authContext).then((accessToken) => {
             setAccessToken(accessToken)
+            console.log('Hurray')
         })
     }, [])
-    return (
-        <AccessTokenContext.Provider value={accessToken}>
-            <div className="app-ui">
-                <UnauthenticatedTemplate>
-                    <div className="sign-in-page">
-                        <SignInPage></SignInPage>
-                    </div>
-                </UnauthenticatedTemplate>
-                <AuthenticatedTemplate>
-                    <BrowserRouter>
-                        <Routes>
-                            <Route path="/" element={<FrontPage />} />
-                            <Route path="test" element={<TestPage />} />
-                        </Routes>
-                    </BrowserRouter>
-                </AuthenticatedTemplate>
-            </div>
-        </AccessTokenContext.Provider>
-    )
+    return <>
+        {accessToken === '' && <>
+            Loading...
+        </>}
+        {accessToken !== '' && <>
+            <AccessTokenContext.Provider value={accessToken}>
+                <div className="app-ui">
+                    <UnauthenticatedTemplate>
+                        <div className="sign-in-page">
+                            <SignInPage></SignInPage>
+                        </div>
+                    </UnauthenticatedTemplate>
+                    <AuthenticatedTemplate>
+                        <BrowserRouter>
+                            <Routes>
+                                <Route path="/" element={<FrontPage />} />
+                                <Route path="test" element={<TestPage />} />
+                            </Routes>
+                        </BrowserRouter>
+                    </AuthenticatedTemplate>
+                </div>
+            </AccessTokenContext.Provider>
+        </>}
+
+    </>
 }
 
 export default App

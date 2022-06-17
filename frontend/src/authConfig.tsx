@@ -26,8 +26,12 @@ export async function fetchAccessToken(context: IMsalContext): Promise<string> {
             return accessToken
         })
         .catch(() => {
-            return context.instance.acquireTokenPopup(loginRequest).then((response) => {
-                return response.accessToken
-            })
+            return context.instance.acquireTokenPopup(loginRequest)
+                .then((response) => {
+                    return response.accessToken
+                }).catch(e => {
+                    console.log(e)
+                    return ''
+                })
         })
 }
