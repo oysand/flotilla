@@ -48,8 +48,8 @@ namespace Api.Services
 
         public Task<MissionRun> UpdateMissionRunType(string missionRunId, MissionRunType missionRunType);
 
-        public Task<MissionRun> UpdateMissionRunStatusByIsarMissionId(
-            string isarMissionId,
+        public Task<MissionRun> UpdateMissionRunStatusById(
+            string missionRunId,
             MissionStatus missionStatus
         );
         public Task<MissionRun?> Delete(string id);
@@ -551,12 +551,12 @@ namespace Api.Services
         }
 
 
-        public async Task<MissionRun> UpdateMissionRunStatusByIsarMissionId(string isarMissionId, MissionStatus missionStatus)
+        public async Task<MissionRun> UpdateMissionRunStatusById(string missionRunId, MissionStatus missionStatus)
         {
-            var missionRun = await ReadByIsarMissionId(isarMissionId);
+            var missionRun = await ReadById(missionRunId);
             if (missionRun is null)
             {
-                string errorMessage = $"Mission with isar mission Id {isarMissionId} was not found";
+                string errorMessage = $"Mission with Id {missionRunId} was not found";
                 logger.LogError("{Message}", errorMessage);
                 throw new MissionRunNotFoundException(errorMessage);
             }

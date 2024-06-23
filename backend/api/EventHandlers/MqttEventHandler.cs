@@ -22,6 +22,8 @@ namespace Api.EventHandlers
         private readonly ILogger<MqttEventHandler> _logger;
         private readonly IServiceScopeFactory _scopeFactory;
 
+        private readonly Semaphore _missionRelevantUpdateSemaphore = new(1, 1);
+
         public MqttEventHandler(ILogger<MqttEventHandler> logger, IServiceScopeFactory scopeFactory)
         {
             _logger = logger;
@@ -67,7 +69,6 @@ namespace Api.EventHandlers
         {
             var provider = GetServiceProvider();
             var robotService = provider.GetRequiredService<IRobotService>();
-            var missionSchedulingService = provider.GetRequiredService<IMissionSchedulingService>();
 
             var isarStatus = (IsarStatusMessage)mqttArgs.Message;
 
@@ -80,13 +81,32 @@ namespace Api.EventHandlers
             }
 
             if (robot.Status == isarStatus.Status) { return; }
+            _missionRelevantUpdateSemaphore.WaitOne();
+            try { await UpdateIsarStatus(isarStatus); }
+            catch (RobotNotFoundException) { return; }
+            finally { _missionRelevantUpdateSemaphore.Release(); }
+        }
 
+        private async Task<Robot> UpdateIsarStatus(IsarStatusMessage isarStatus)
+        {
+            var provider = GetServiceProvider();
+            var robotService = provider.GetRequiredService<IRobotService>();
+            var missionSchedulingService = provider.GetRequiredService<IMissionSchedulingService>();
+
+            var robot = await robotService.ReadByIsarId(isarStatus.IsarId);
+            if (robot == null)
+            {
+                string errorMessage = $"Received message from unknown ISAR instance {isarStatus.IsarId} with robot name {isarStatus.RobotName}";
+                _logger.LogError("{Message}", errorMessage);
+                throw new RobotNotFoundException(errorMessage);
+            }
             robot.Status = isarStatus.Status;
-            await robotService.Update(robot);
+            var updatedRobot = await robotService.Update(robot);
             _logger.LogInformation("Updated status for robot {Name} to {Status}", robot.Name, isarStatus.Status);
 
             if (isarStatus.Status == RobotStatus.Available) missionSchedulingService.TriggerRobotAvailable(new RobotAvailableEventArgs(robot.Id));
             else if (isarStatus.Status == RobotStatus.Offline) await robotService.UpdateCurrentArea(robot.Id, null);
+            return updatedRobot;
         }
 
         private async void OnIsarRobotInfo(object? sender, MqttReceivedArgs mqttArgs)
@@ -230,7 +250,6 @@ namespace Api.EventHandlers
             var taskDurationService = provider.GetRequiredService<ITaskDurationService>();
             var lastMissionRunService = provider.GetRequiredService<ILastMissionRunService>();
             var missionSchedulingService = provider.GetRequiredService<IMissionSchedulingService>();
-            var signalRService = provider.GetRequiredService<ISignalRService>();
 
             var isarMission = (IsarMissionMessage)mqttArgs.Message;
 
@@ -252,50 +271,19 @@ namespace Api.EventHandlers
 
             if (flotillaMissionRun.Status == status) { return; }
 
-            if (flotillaMissionRun.IsLocalizationMission())
-            {
-                if (status == MissionStatus.Successful || status == MissionStatus.PartiallySuccessful)
-                {
-                    try
-                    {
-                        await robotService.UpdateCurrentArea(flotillaMissionRun.Robot.Id, flotillaMissionRun.Area);
-                    }
-                    catch (RobotNotFoundException)
-                    {
-                        _logger.LogError("Could not find robot '{RobotName}' with ID '{Id}'", flotillaMissionRun.Robot.Name, flotillaMissionRun.Robot.Id);
-                        return;
-                    }
-                }
-                else if (status == MissionStatus.Aborted || status == MissionStatus.Cancelled || status == MissionStatus.Failed)
-                {
-                    try
-                    {
-                        await robotService.UpdateCurrentArea(flotillaMissionRun.Robot.Id, null);
-                        _logger.LogError("Localization mission run {MissionRunId} was unsuccessful on {RobotId}, scheduled missions will be aborted", flotillaMissionRun.Id, flotillaMissionRun.Robot.Id);
-                        try { await missionSchedulingService.AbortAllScheduledMissions(flotillaMissionRun.Robot.Id, "Aborted: Robot was not localized"); }
-                        catch (RobotNotFoundException) { _logger.LogError("Failed to abort scheduled missions for robot {RobotId}", flotillaMissionRun.Robot.Id); }
-                    }
-                    catch (RobotNotFoundException)
-                    {
-                        _logger.LogError("Could not find robot '{RobotName}' with ID '{Id}'", flotillaMissionRun.Robot.Name, flotillaMissionRun.Robot.Id);
-                        return;
-                    }
-
-                    signalRService.ReportGeneralFailToSignalR(flotillaMissionRun.Robot, "Failed Localization Mission", $"Failed localization mission for robot {flotillaMissionRun.Robot.Name}.");
-                    _logger.LogError("Localization mission for robot '{RobotName}' failed.", isarMission.RobotName);
-                }
-            }
-
+            _missionRelevantUpdateSemaphore.WaitOne();
             MissionRun updatedFlotillaMissionRun;
-            try { updatedFlotillaMissionRun = await missionRunService.UpdateMissionRunStatusByIsarMissionId(isarMission.MissionId, status); }
+            try { updatedFlotillaMissionRun = await UpdateMissionRunStatus(flotillaMissionRun.Id, status); }
             catch (MissionRunNotFoundException) { return; }
+            catch (RobotNotFoundException) { return; }
+            finally { _missionRelevantUpdateSemaphore.Release(); }
 
             _logger.LogInformation(
                 "Mission '{Id}' (ISARMissionID='{IsarMissionId}') status updated to '{Status}' for robot '{RobotName}' with ISAR id '{IsarId}'",
                 updatedFlotillaMissionRun.Id, isarMission.MissionId, isarMission.Status, isarMission.RobotName, isarMission.IsarId
             );
 
-            if (!updatedFlotillaMissionRun.IsCompleted) return;
+            if (!updatedFlotillaMissionRun.IsCompleted) { return; }
 
             var robot = await robotService.ReadByIsarId(isarMission.IsarId);
             if (robot is null)
@@ -345,6 +333,44 @@ namespace Api.EventHandlers
             }
 
             await taskDurationService.UpdateAverageDurationPerTask(robot.Model.Type);
+            _missionRelevantUpdateSemaphore.Release();
+        }
+
+        private async Task<MissionRun> UpdateMissionRunStatus(string missionRunId, MissionStatus status)
+        {
+            var provider = GetServiceProvider();
+            var missionRunService = provider.GetRequiredService<IMissionRunService>();
+            var robotService = provider.GetRequiredService<IRobotService>();
+            var missionSchedulingService = provider.GetRequiredService<IMissionSchedulingService>();
+            var signalRService = provider.GetRequiredService<ISignalRService>();
+
+            var flotillaMissionRun = await missionRunService.ReadById(missionRunId);
+            if (flotillaMissionRun is null)
+            {
+                string errorMessage = $"Mission with isar mission Id {missionRunId} was not found";
+                _logger.LogError("{Message}", errorMessage);
+                throw new MissionRunNotFoundException(errorMessage);
+            }
+
+            if (flotillaMissionRun.IsLocalizationMission())
+            {
+                if (status == MissionStatus.Successful || status == MissionStatus.PartiallySuccessful)
+                {
+                    await robotService.UpdateCurrentArea(flotillaMissionRun.Robot.Id, flotillaMissionRun.Area);
+                }
+                else if (status == MissionStatus.Aborted || status == MissionStatus.Cancelled || status == MissionStatus.Failed)
+                {
+
+                    await robotService.UpdateCurrentArea(flotillaMissionRun.Robot.Id, null);
+                    _logger.LogError("Localization mission run {MissionRunId} was unsuccessful on {RobotId}, scheduled missions will be aborted", flotillaMissionRun.Id, flotillaMissionRun.Robot.Id);
+                    await missionSchedulingService.AbortAllScheduledMissions(flotillaMissionRun.Robot.Id, "Aborted: Robot was not localized");
+
+                    signalRService.ReportGeneralFailToSignalR(flotillaMissionRun.Robot, "Failed Localization Mission", $"Failed localization mission for robot {flotillaMissionRun.Robot.Name}.");
+                    _logger.LogError("Localization mission for robot '{RobotName}' failed.", flotillaMissionRun.Robot.Name);
+                }
+            }
+
+            return await missionRunService.UpdateMissionRunStatusById(flotillaMissionRun.Id, status);
         }
 
         private async void OnIsarTaskUpdate(object? sender, MqttReceivedArgs mqttArgs)
