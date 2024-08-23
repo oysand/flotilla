@@ -36,6 +36,7 @@ namespace Api.EventHandlers
         private IInspectionService InspectionService => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IInspectionService>();
         private IInstallationService InstallationService => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IInstallationService>();
         private ILastMissionRunService LastMissionRunService => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<ILastMissionRunService>();
+        private ILocalizationService LocalizationService => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<ILocalizationService>();
         private IMissionRunService MissionRunService => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IMissionRunService>();
         private IMissionSchedulingService MissionScheduling => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IMissionSchedulingService>();
         private IMissionTaskService MissionTaskService => _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IMissionTaskService>();
@@ -107,10 +108,7 @@ namespace Api.EventHandlers
             _logger.LogInformation("OnIsarStatus: Robot {robotName} has status {robotStatus} and current area {areaName}", updatedRobot.Name, updatedRobot.Status, updatedRobot.CurrentArea?.Name);
 
             if (isarStatus.Status == RobotStatus.Available) MissionScheduling.TriggerRobotAvailable(new RobotAvailableEventArgs(robot.Id));
-            else if (isarStatus.Status == RobotStatus.Offline)
-            {
-                await RobotService.UpdateCurrentArea(robot.Id, null);
-            }
+            else if (isarStatus.Status == RobotStatus.Offline) { await LocalizationService.DelocalizeRobot(robot.Id); }
         }
 
         private async void OnIsarRobotInfo(object? sender, MqttReceivedArgs mqttArgs)
@@ -279,19 +277,12 @@ namespace Api.EventHandlers
                 }
                 else if (flotillaMissionRun.Tasks.All((task) => task.Status == Database.Models.TaskStatus.Cancelled || task.Status == Database.Models.TaskStatus.Failed) || flotillaMissionRun.Status == MissionStatus.Aborted)
                 {
-                    try
-                    {
-                        await RobotService.UpdateCurrentArea(flotillaMissionRun.Robot.Id, null);
+                    await LocalizationService.DelocalizeRobot(flotillaMissionRun.Robot.Id);
+                    _logger.LogError("Localization mission run {MissionRunId} was unsuccessful on {RobotId}, scheduled missions will be aborted", flotillaMissionRun.Id, flotillaMissionRun.Robot.Id);
 
-                        _logger.LogError("Localization mission run {MissionRunId} was unsuccessful on {RobotId}, scheduled missions will be aborted", flotillaMissionRun.Id, flotillaMissionRun.Robot.Id);
-                        try { await MissionScheduling.AbortAllScheduledMissions(flotillaMissionRun.Robot.Id, "Aborted: Robot was not localized"); }
-                        catch (RobotNotFoundException) { _logger.LogError("Failed to abort scheduled missions for robot {RobotId}", flotillaMissionRun.Robot.Id); }
-                    }
-                    catch (RobotNotFoundException)
-                    {
-                        _logger.LogError("Could not find robot '{RobotName}' with ID '{Id}'", flotillaMissionRun.Robot.Name, flotillaMissionRun.Robot.Id);
-                        return;
-                    }
+
+                    try { await MissionScheduling.AbortAllScheduledMissions(flotillaMissionRun.Robot.Id, "Aborted: Robot was not localized"); }
+                    catch (RobotNotFoundException) { _logger.LogError("Failed to abort scheduled missions for robot {RobotId}", flotillaMissionRun.Robot.Id); }
 
                     SignalRService.ReportGeneralFailToSignalR(flotillaMissionRun.Robot, "Failed Localization Mission", $"Failed localization mission for robot {flotillaMissionRun.Robot.Name}.");
                     _logger.LogError("Localization mission for robot '{RobotName}' failed.", isarMission.RobotName);
@@ -320,15 +311,7 @@ namespace Api.EventHandlers
 
             if (updatedFlotillaMissionRun.IsReturnHomeMission() && (updatedFlotillaMissionRun.Status == MissionStatus.Cancelled || updatedFlotillaMissionRun.Status == MissionStatus.Failed))
             {
-                try
-                {
-                    await RobotService.UpdateCurrentArea(robot.Id, null);
-                }
-                catch (RobotNotFoundException)
-                {
-                    _logger.LogError("Could not find robot '{RobotName}' with ID '{Id}'", robot.Name, robot.Id);
-                    return;
-                }
+                await LocalizationService.DelocalizeRobot(robot.Id);
             }
 
             try

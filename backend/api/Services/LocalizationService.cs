@@ -1,12 +1,16 @@
 ﻿using Api.Database.Models;
 using Api.Utilities;
+using Api.Services.Events;
 namespace Api.Services
 {
     public interface ILocalizationService
     {
         public Task EnsureRobotIsOnSameInstallationAsMission(Robot robot, MissionDefinition missionDefinition);
         public Task<bool> RobotIsLocalized(string robotId);
+        public Task DelocalizeRobot(string robotId);
         public Task<bool> RobotIsOnSameDeckAsMission(string robotId, string areaId);
+        public void TriggerLocalizationTimeout(LocalizationTimeoutEventArgs e);
+        public void TriggerLocalizationTimerStartOrReset(LocalizationTimerStartOrResetEventArgs e);
     }
 
     public class LocalizationService(ILogger<LocalizationService> logger, IRobotService robotService, IInstallationService installationService, IAreaService areaService) : ILocalizationService
@@ -31,6 +35,18 @@ namespace Api.Services
             }
         }
 
+        public async Task LocalizeRobot(string robotId, string areaId)
+        {
+            var robot = await robotService.ReadById(robotId);
+            if (robot is null)
+            {
+                string errorMessage = $"Robot with ID: {robotId} was not found in the database";
+                logger.LogError("{Message}", errorMessage);
+                throw new RobotNotFoundException(errorMessage);
+            }
+            await robotService.UpdateCurrentArea(robot.Id, null);
+        }
+
         public async Task<bool> RobotIsLocalized(string robotId)
         {
             var robot = await robotService.ReadById(robotId);
@@ -42,6 +58,20 @@ namespace Api.Services
             }
 
             return robot.CurrentArea is not null;
+        }
+
+        public async Task DelocalizeRobot(string robotId)
+        {
+            var robot = await robotService.ReadById(robotId);
+            if (robot is null)
+            {
+                string errorMessage = $"Robot with ID: {robotId} was not found in the database";
+                logger.LogError("{Message}", errorMessage);
+                throw new RobotNotFoundException(errorMessage);
+                // Remember to add try catch where delocalized is used
+            }
+            // Try catch the one below
+            await robotService.UpdateCurrentArea(robot.Id, null);
         }
 
         public async Task<bool> RobotIsOnSameDeckAsMission(string robotId, string areaId)
@@ -84,5 +114,13 @@ namespace Api.Services
 
             return robot.CurrentArea.Deck.Id == missionArea.Deck.Id;
         }
+
+        public void TriggerLocalizationTimeout(LocalizationTimeoutEventArgs e) { OnLocalizationTimeout(e); }
+        protected virtual void OnLocalizationTimeout(LocalizationTimeoutEventArgs e) { LocalizationTimeout?.Invoke(this, e); }
+        public static event EventHandler<LocalizationTimeoutEventArgs>? LocalizationTimeout;
+
+        public void TriggerLocalizationTimerStartOrReset(LocalizationTimerStartOrResetEventArgs e) { OnLocalizationTimerStartOrReset(e); }
+        protected virtual void OnLocalizationTimerStartOrReset(LocalizationTimerStartOrResetEventArgs e) { LocalizationTimerStartOrReset?.Invoke(this, e); }
+        public static event EventHandler<LocalizationTimerStartOrResetEventArgs>? LocalizationTimerStartOrReset;
     }
 }

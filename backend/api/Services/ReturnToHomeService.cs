@@ -8,7 +8,7 @@ namespace Api.Services
 
     }
 
-    public class ReturnToHomeService(ILogger<ReturnToHomeService> logger, IRobotService robotService, IMissionRunService missionRunService, IMapService mapService) : IReturnToHomeService
+    public class ReturnToHomeService(ILogger<ReturnToHomeService> logger, ILocalizationService localizationService, IRobotService robotService, IMissionRunService missionRunService, IMapService mapService) : IReturnToHomeService
     {
         public async Task<MissionRun?> ScheduleReturnToHomeMissionRunIfNotAlreadyScheduledOrRobotIsHome(string robotId)
         {
@@ -23,7 +23,7 @@ namespace Api.Services
             if (await IsRobotHome(robotId))
             {
                 logger.LogInformation("Robot {RobotId} is home, setting current area to null", robotId);
-                await robotService.UpdateCurrentArea(robotId, null);
+                await localizationService.DelocalizeRobot(robotId);
                 return null;
             }
 

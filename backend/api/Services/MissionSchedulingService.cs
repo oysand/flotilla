@@ -72,7 +72,7 @@ namespace Api.Services
 
                 if (robot.RobotCapabilities == null || !robot.RobotCapabilities.Contains(RobotCapabilitiesEnum.return_to_home))
                 {
-                    await robotService.UpdateCurrentArea(robot.Id, null);
+                    await localizationService.DelocalizeRobot(robot.Id);
                     return;
                 }
                 else
@@ -82,7 +82,7 @@ namespace Api.Services
                     {
                         signalRService.ReportGeneralFailToSignalR(robot, $"Failed to schedule return to home for robot {robot.Name}", "");
                         logger.LogError("Failed to schedule a return to home mission for robot {RobotId}", robot.Id);
-                        await robotService.UpdateCurrentArea(robot.Id, null);
+                        await localizationService.DelocalizeRobot(robot.Id);
                     }
 
                     if (missionRun == null) { return; }  // The robot is already home
@@ -128,7 +128,7 @@ namespace Api.Services
                 catch (ReturnToHomeMissionFailedToScheduleException)
                 {
                     logger.LogError("Failed to schedule a return to home mission for robot {RobotId}", robot.Id);
-                    await robotService.UpdateCurrentArea(robot.Id, null);
+                    await localizationService.DelocalizeRobot(robot.Id);
                 }
                 return;
             }
@@ -180,7 +180,7 @@ namespace Api.Services
             catch (ReturnToHomeMissionFailedToScheduleException)
             {
                 logger.LogError("Failed to schedule a return to home mission for robot {RobotId}", robot.Id);
-                await robotService.UpdateCurrentArea(robot.Id, null);
+                await localizationService.DelocalizeRobot(robot.Id);
                 return null;
             }
             return missionRun;
