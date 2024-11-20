@@ -81,7 +81,6 @@ namespace Api.Controllers
             }
             return NotFound("Could not find any inspection with the provided '{id}'");
         }
-
     }
 
 
